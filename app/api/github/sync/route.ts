@@ -9,6 +9,25 @@ if (!GITHUB_USERNAME) {
 }
 
 export async function GET(req: Request) {
+  const existingUser = await prisma.user.findUnique({
+    where: {
+      githubUsername: GITHUB_USERNAME,
+    },
+  });
+
+  const { searchParams } = new URL(req.url);
+  const force = searchParams.get("force") === "true";
+  if (existingUser && !force) {
+    const diffTime = Date.now() - new Date(existingUser.fetchedAt).getTime();
+    if (diffTime < 60 * 60 * 1000) {
+      return NextResponse.json({
+        success: true,
+        source: "cache",
+        user: existingUser,
+      });
+    }
+  }
+
   try {
     // Fetch GitHub profile data
     const rawProfile = await fetch(
@@ -27,14 +46,11 @@ export async function GET(req: Request) {
 
     const profile = await rawProfile.json();
 
-    const existing = await prisma.user.findFirst({
-      where: { githubUsername: GITHUB_USERNAME },
-    });
-    const user = existing
+    const user = existingUser
       ? await prisma.user.update({
-          where: { id: existing.id },
+          where: { id: existingUser.id },
           data: {
-            name: profile.name || "",
+            name: profile.name || profile.login,
             avatarUrl: profile.avatar_url || null,
             bio: profile.bio || null,
             followers: profile.followers || 0,
@@ -50,10 +66,45 @@ export async function GET(req: Request) {
             bio: profile.bio || null,
             followers: profile.followers || 0,
             location: profile.location || null,
+            fetchedAt: new Date(),
           },
         });
+    const reposRetrieved = await fetch(
+      `https://api.github.com/users/${GITHUB_USERNAME}/repos?per_page=100&sort=updated`,
 
-    return NextResponse.json({ success: true, user });
+      {
+        headers: {
+          Authorization: `Bearer ${GITHUB_TOKEN}`,
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+      }
+    );
+    if (!reposRetrieved.ok) {
+      throw new Error(`GitHub repos API failed: ${reposRetrieved.status}`);
+    }
+    const repos = await reposRetrieved.json();
+    await prisma.repo.deleteMany({
+      where: {
+        userId: user.id,
+      },
+    });
+    await prisma.repo.createMany({
+      data: repos.map((repo: any) => ({
+        name: repo.name,
+        description: repo.description ?? null,
+        stars: repo.stargazers_count,
+        forks: repo.forks_count,
+        url: repo.html_url,
+        language: repo.language || "unknown",
+        is_pinned: false,
+        userId: user.id,
+      })),
+    });
+    return NextResponse.json({
+      success: true,
+      user,
+      repos_synced: repos.length,
+    });
   } catch (error) {
     console.error("Error syncing GitHub user:", error);
     return NextResponse.json(
