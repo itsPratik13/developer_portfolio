@@ -10,7 +10,10 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+<<<<<<< HEAD
 
+=======
+>>>>>>> 537e852046fcf336f71b99fd373e265a48257fe1
  
 }
 
@@ -60,4 +63,8 @@ model LanguageStats {
 
   userId Int
   user   User @relation(fields: [userId], references: [id])
+<<<<<<< HEAD
 }
+=======
+}
+>>>>>>> 537e852046fcf336f71b99fd373e265a48257fe1
